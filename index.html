@@ -85,6 +85,25 @@
     background: var(--card); color: var(--text); min-width: 0; flex: 1 1 200px; max-width: 320px; }
   .muted { color: var(--muted); font-size: 14px; }
   .hidden { display: none !important; }
+  h3 { font-size: 15px; margin: 22px 0 10px; }
+  .notif-bar { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+  select { font: inherit; padding: 5px 8px; border-radius: 8px; border: 1px solid var(--border); background: var(--card); color: var(--text); }
+  .mail { border: 1px solid var(--border); border-radius: 8px; margin-bottom: 10px; }
+  .mail summary { cursor: pointer; padding: 10px 14px; display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; list-style: none; }
+  .mail summary::-webkit-details-marker { display: none; }
+  .mail summary::before { content: "▸"; color: var(--muted); }
+  .mail[open] summary::before { content: "▾"; }
+  .mail .quien { font-weight: 600; }
+  .mail .cuantas { color: var(--muted); font-size: 13.5px; }
+  .mail .estado { margin-left: auto; font-size: 12.5px; font-weight: 600; padding: 1px 9px; border-radius: 999px; background: var(--info-bg); color: var(--muted); }
+  .mail.listo .estado { background: color-mix(in srgb, #2e9e5b 18%, transparent); color: #2e9e5b; }
+  .mail .cuerpo { padding: 0 14px 14px; }
+  .mail label { display: block; font-size: 12.5px; color: var(--muted); margin: 8px 0 4px; }
+  .mail input[type=text], .mail textarea { width: 100%; font: inherit; font-size: 14px; padding: 7px 10px; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--bg); color: var(--text); }
+  .mail textarea { min-height: 220px; resize: vertical; font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 13px; }
+  .mail .acciones { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; align-items: center; }
+  .mail .nota { font-size: 12.5px; color: var(--muted); }
   footer { color: var(--muted); font-size: 13px; text-align: center; margin-top: 24px; }
 </style>
 </head>
@@ -141,6 +160,35 @@
       <div class="table-wrap"><table id="fullTable"></table></div>
       <p class="muted" id="countInfo"></p>
     </div>
+
+    <!-- NOTIFICACIÓN A RESPONSABLES -->
+    <div class="card section-gap" id="notificar">
+      <h2>Notificar a responsables <small>· revisá cada mail antes de enviarlo</small></h2>
+      <div id="notifSinDatos" class="muted hidden">
+        Para preparar mails, agregá al Excel una hoja llamada <b>Responsables</b> con las columnas <b>Activo</b>, <b>Responsable</b> y <b>Email</b>
+        (o las columnas Responsable y Email en la primera hoja). Hay un ejemplo en la plantilla.
+      </div>
+      <div id="notifContenido">
+        <div class="notif-bar">
+          <label>Incluir severidades desde:
+            <select id="sevMin">
+              <option value="Sin clasificar">Todas</option>
+              <option value="Baja">Baja o mayor</option>
+              <option value="Media">Media o mayor</option>
+              <option value="Alta">Alta o mayor</option>
+              <option value="Crítica">Solo Críticas</option>
+            </select>
+          </label>
+          <span class="muted" id="notifProgreso"></span>
+        </div>
+        <p class="muted" style="margin-top:0">La app <b>no envía mails sola</b>: prepara cada uno para que lo revises, lo edites si hace falta y lo envíes vos desde tu correo.
+          <b>Abrir en mi correo</b> abre un mail nuevo con todo cargado. <b>Descargar para Outlook</b> baja un archivo que, con doble clic, se abre en Outlook listo para enviar.</p>
+        <div id="mails"></div>
+
+        <h3>Equipos sin responsable</h3>
+        <div id="sinResp"></div>
+      </div>
+    </div>
   </section>
 
   <footer>Regla: severidad (Crítica &gt; Alta &gt; Media &gt; Baja &gt; Informativa) y, a igual severidad, mayor CVSS primero.
@@ -160,8 +208,12 @@ const COLUMNAS = {
   cvss:      ["cvss", "cvss score", "cvss base score", "cvss v3", "cvss v3 base score", "cvss3", "puntaje", "puntaje cvss", "score"],
   activo:    ["activo", "host", "servidor", "equipo", "asset", "ip", "hostname", "dns name"],
   cve:       ["cve", "cves", "cve id"],
-  estado:    ["estado", "status", "state"]
+  estado:    ["estado", "status", "state"],
+  responsable: ["responsable", "nombre responsable", "owner", "dueno", "encargado", "referente"],
+  email:     ["email", "e mail", "mail", "correo", "email responsable", "mail responsable", "correo responsable", "owner email"]
 };
+/* Hoja opcional de responsables: se reconoce si su nombre contiene "responsable" u "owner" */
+const HOJA_RESPONSABLES = ["responsable", "owner"];
 
 /* Orden de severidades (menor número = más prioritaria) */
 const SEVERIDADES = ["Crítica", "Alta", "Media", "Baja", "Informativa", "Sin clasificar"];
@@ -218,9 +270,35 @@ function sevDesdeCvss(c) {        // rangos oficiales CVSS v3
   return "Informativa";
 }
 
-function procesar(registros, encabezados) {
+const emailValido = (e) => /^[^\s@<>(),;:"]+@[^\s@<>(),;:"]+\.[^\s@<>(),;:"]+$/.test(e);
+
+/* Arma el mapa Activo -> {responsable, email} a partir de la hoja "Responsables" */
+function leerResponsables(matriz, avisos) {
+  const mapaResp = new Map();
+  if (!matriz) return mapaResp;
+  const filaEnc = matriz.findIndex(r => r.filter(c => String(c ?? "").trim() !== "").length >= 2);
+  if (filaEnc < 0) return mapaResp;
+  const enc = matriz[filaEnc].map(h => String(h ?? "").trim());
+  const m = mapearColumnas(enc);
+  if (!m.activo || (!m.responsable && !m.email)) {
+    avisos.push("Hay una hoja de responsables, pero no encontré las columnas <b>Activo</b> y <b>Responsable</b>/<b>Email</b>. No se usó.");
+    return mapaResp;
+  }
+  for (const r of matriz.slice(filaEnc + 1)) {
+    const fila = Object.fromEntries(enc.map((h, i) => [h, r[i]]));
+    const activo = normalizar(fila[m.activo]);
+    if (!activo) continue;
+    mapaResp.set(activo, {
+      responsable: m.responsable ? String(fila[m.responsable] ?? "").trim() : "",
+      email: m.email ? String(fila[m.email] ?? "").trim() : ""
+    });
+  }
+  return mapaResp;
+}
+
+function procesar(registros, encabezados, mapaResp = new Map(), avisosPrevios = []) {
   const mapa = mapearColumnas(encabezados);
-  const avisos = [];
+  const avisos = [...avisosPrevios];
 
   if (!mapa.titulo) throw new Error("No encontré la columna con el nombre de la vulnerabilidad. Se espera una columna llamada, por ejemplo, <b>Vulnerabilidad</b> o <b>Título</b>.<br>Columnas encontradas: " + encabezados.map(escapar).join(", "));
   if (!mapa.severidad && !mapa.cvss) throw new Error("No encontré columnas de <b>Severidad</b> ni de <b>CVSS</b>. Se necesita al menos una para poder priorizar.<br>Columnas encontradas: " + encabezados.map(escapar).join(", "));
@@ -242,7 +320,13 @@ function procesar(registros, encabezados) {
       }
       if (!sev && cvss !== null) { sev = sevDesdeCvss(cvss); if (mapa.severidad) derivadas++; }
       if (!sev) { sev = "Sin clasificar"; sinClasificar++; }
+      // Responsable: primero la columna de la fila; si no hay, la hoja de responsables por activo
+      const activoTxt = mapa.activo ? String(r[mapa.activo] ?? "").trim() : "";
+      const deHoja = mapaResp.get(normalizar(activoTxt)) || {};
+      const responsable = (mapa.responsable && String(r[mapa.responsable] ?? "").trim()) || deHoja.responsable || "";
+      const email = (mapa.email && String(r[mapa.email] ?? "").trim()) || deHoja.email || "";
       return {
+        responsable, email,
         orden: i,
         id: mapa.id ? r[mapa.id] : "",
         titulo: r[mapa.titulo],
@@ -266,7 +350,9 @@ function procesar(registros, encabezados) {
   if (sinClasificar) avisos.push(`${sinClasificar} fila(s) quedaron "Sin clasificar" (sin severidad ni CVSS válidos). Revisalas en el listado.`);
   if (mapa.estado) avisos.push("El archivo tiene columna de Estado: se muestra, pero no se usa para filtrar (por ejemplo, no se excluyen las cerradas).");
 
-  return { resultado, avisos, tieneActivo: !!mapa.activo, tieneCve: !!mapa.cve, tieneEstado: !!mapa.estado, tieneId: !!mapa.id };
+  const hayResponsables = mapaResp.size > 0 || !!mapa.responsable || !!mapa.email;
+  if (!hayResponsables) avisos.push("No hay datos de responsables (ni columnas Responsable/Email ni hoja \"Responsables\"): no se pueden preparar los mails.");
+  return { resultado, avisos, hayResponsables, tieneActivo: !!mapa.activo, tieneCve: !!mapa.cve, tieneEstado: !!mapa.estado, tieneId: !!mapa.id };
 }
 
 /* ---------------- Renderizado ---------------- */
@@ -313,6 +399,10 @@ function render(nombreArchivo, datos) {
 
   renderFiltros(cuenta);
   renderListado();
+  $("notifSinDatos").classList.toggle("hidden", datos.hayResponsables);
+  $("notifContenido").classList.toggle("hidden", !datos.hayResponsables);
+  $("sevMin").value = "Sin clasificar";
+  if (datos.hayResponsables) renderNotificaciones(true);
   $("upload").classList.add("hidden");
   $("results").classList.remove("hidden");
   window.scrollTo(0, 0);
@@ -374,6 +464,145 @@ function descargarCsv() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ---------------- Notificación a responsables ---------------- */
+let mailsEstado = {};   // por email: { asunto, cuerpo, editado, listo }
+
+function vulnsANotificar() {
+  const limite = SEVERIDADES.indexOf($("sevMin").value);
+  return filas.filter(f => SEVERIDADES.indexOf(f.severidad) <= limite);   // "Todas" incluye también las "Sin clasificar"
+}
+
+function agrupar() {
+  const grupos = new Map();     // email -> { nombre, email, vulns }
+  const sinResp = new Map();    // activo -> { activo, motivo, responsable, vulns }
+  for (const f of vulnsANotificar()) {
+    if (f.email && emailValido(f.email)) {
+      const clave = f.email.toLowerCase();
+      if (!grupos.has(clave)) grupos.set(clave, { nombre: f.responsable, email: f.email, vulns: [] });
+      grupos.get(clave).vulns.push(f);
+    } else {
+      const activo = f.activo || "(sin activo indicado)";
+      const motivo = !f.activo ? "La vulnerabilidad no indica el activo"
+        : f.email ? "Responsable con mail inválido"
+        : f.responsable ? "Responsable sin mail" : "Sin responsable asignado";
+      if (!sinResp.has(activo)) sinResp.set(activo, { activo, motivo, responsable: f.responsable, email: f.email, vulns: [] });
+      sinResp.get(activo).vulns.push(f);
+    }
+  }
+  return { grupos: [...grupos.values()], sinResp: [...sinResp.values()] };
+}
+
+function textoMail(g) {
+  const activos = [...new Set(g.vulns.map(v => v.activo).filter(Boolean))];
+  const conteo = SEVERIDADES.map(s => [s, g.vulns.filter(v => v.severidad === s).length]).filter(([, n]) => n)
+    .map(([s, n]) => `${n} ${s.toLowerCase()}${n > 1 && s !== "Sin clasificar" ? "s" : ""}`).join(", ");
+  const lista = g.vulns.map((v, i) =>
+    `${i + 1}. [${v.severidad}${v.cvss !== null ? " · CVSS " + v.cvss.toFixed(1) : ""}] ${v.titulo}\n` +
+    `   Activo: ${v.activo || "-"}${v.cve ? " · CVE: " + v.cve : ""}${v.id ? " · ID: " + v.id : ""}`).join("\n");
+  const asunto = `Vulnerabilidades a remediar en ${activos.slice(0, 3).join(", ")}${activos.length > 3 ? " y otros" : ""} (${g.vulns.length})`;
+  const cuerpo =
+`Hola${g.nombre ? " " + g.nombre : ""}:
+
+Como responsable de ${activos.length === 1 ? "el equipo " + activos[0] : "los equipos " + activos.join(", ")}, te compartimos las vulnerabilidades detectadas que requieren remediación, ordenadas por prioridad (${conteo}):
+
+${lista}
+
+Por favor, confirmá la recepción de este mail e indicá una fecha estimada de solución para cada una.
+
+Saludos.`;
+  return { asunto, cuerpo };
+}
+
+function renderNotificaciones(reiniciar) {
+  if (reiniciar) mailsEstado = {};
+  const { grupos, sinResp } = agrupar();
+
+  // Mails por responsable
+  $("mails").innerHTML = grupos.length ? grupos.map((g, i) => {
+    const clave = g.email.toLowerCase();
+    const previo = mailsEstado[clave];
+    const nuevo = textoMail(g);
+    mailsEstado[clave] = previo && previo.editado ? previo : { ...nuevo, editado: false, listo: previo ? previo.listo : false };
+    const st = mailsEstado[clave];
+    const maxSev = g.vulns[0].severidad;
+    return `<details class="mail ${st.listo ? "listo" : ""}" data-clave="${escapar(clave)}" ${i === 0 ? "open" : ""}>
+      <summary><span class="quien">${escapar(g.nombre || g.email)}</span><span class="cuantas">${escapar(g.email)} · ${g.vulns.length} vulnerabilidad(es) · máx. ${chipSev(maxSev)}</span>
+        <span class="estado">${st.listo ? "Preparado ✓" : "Pendiente de revisión"}</span></summary>
+      <div class="cuerpo">
+        <label>Para</label><input type="text" value="${escapar(g.email)}" readonly>
+        <label>Asunto</label><input type="text" class="asunto" value="${escapar(st.asunto)}">
+        <label>Mensaje</label><textarea class="texto">${escapar(st.cuerpo)}</textarea>
+        <div class="acciones">
+          <button class="primary btn-abrir">Abrir en mi correo</button>
+          <button class="btn-eml">Descargar para Outlook</button>
+          <button class="btn-restaurar">Restaurar texto original</button>
+          <span class="nota"></span>
+        </div>
+      </div></details>`;
+  }).join("") : `<p class="muted">No hay vulnerabilidades con responsable y mail válidos para las severidades elegidas.</p>`;
+
+  $("mails").querySelectorAll(".mail").forEach(det => {
+    const clave = det.dataset.clave, st = mailsEstado[clave];
+    const g = grupos.find(x => x.email.toLowerCase() === clave);
+    const asunto = det.querySelector(".asunto"), texto = det.querySelector(".texto"), nota = det.querySelector(".nota");
+    const marcarEditado = () => { st.asunto = asunto.value; st.cuerpo = texto.value; st.editado = true; };
+    asunto.oninput = marcarEditado; texto.oninput = marcarEditado;
+    const marcarListo = () => { st.listo = true; det.classList.add("listo"); det.querySelector(".estado").textContent = "Preparado ✓"; progreso(); };
+    det.querySelector(".btn-abrir").onclick = () => {
+      const url = `mailto:${encodeURIComponent(g.email)}?subject=${encodeURIComponent(st.asunto)}&body=${encodeURIComponent(st.cuerpo.replace(/\r?\n/g, "\r\n"))}`;
+      if (url.length > 1900) nota.textContent = "Mail largo: si tu correo lo corta, usá «Descargar para Outlook».";
+      window.location.href = url;
+      marcarListo();
+    };
+    det.querySelector(".btn-eml").onclick = () => { descargarEml(g, st); marcarListo(); };
+    det.querySelector(".btn-restaurar").onclick = () => {
+      const o = textoMail(g); Object.assign(st, o, { editado: false });
+      asunto.value = o.asunto; texto.value = o.cuerpo; nota.textContent = "Texto restaurado.";
+    };
+  });
+  progreso();
+
+  // Equipos sin responsable
+  $("sinResp").innerHTML = sinResp.length
+    ? `<div class="table-wrap"><table><tr><th>Activo</th><th>Motivo</th><th class="num">Vulns.</th><th>Máx. severidad</th></tr>` +
+      sinResp.map(s => `<tr><td>${escapar(s.activo)}</td><td>${escapar(s.motivo)}${s.responsable ? ` (${escapar(s.responsable)})` : ""}</td>
+        <td class="num">${s.vulns.length}</td><td>${chipSev(s.vulns[0].severidad)}</td></tr>`).join("") +
+      `</table></div><div style="margin-top:10px"><button id="btnSinResp">Descargar listado (CSV)</button></div>`
+    : `<p class="muted">Todos los equipos con vulnerabilidades tienen responsable con mail. 👍</p>`;
+  if (sinResp.length) $("btnSinResp").onclick = () => {
+    const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lineas = [["Activo", "Motivo", "Responsable", "Email", "Cantidad", "Máxima severidad", "Vulnerabilidades"].join(";"),
+      ...sinResp.map(s => [s.activo, s.motivo, s.responsable, s.email, s.vulns.length, s.vulns[0].severidad,
+        s.vulns.map(v => v.titulo).join(" | ")].map(q).join(";"))];
+    bajar(new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" }), "equipos_sin_responsable.csv");
+  };
+}
+
+function progreso() {
+  const total = Object.keys(mailsEstado).length, listos = Object.values(mailsEstado).filter(s => s.listo).length;
+  $("notifProgreso").textContent = total ? `${listos} de ${total} mails preparados` : "";
+}
+
+/* Archivo .eml: Outlook lo abre como borrador listo para enviar (X-Unsent: 1) */
+function descargarEml(g, st) {
+  const b64 = (s) => { const bytes = new TextEncoder().encode(s); let bin = ""; bytes.forEach(b => bin += String.fromCharCode(b)); return btoa(bin); };
+  const enc = (s) => `=?UTF-8?B?${b64(s)}?=`;
+  const para = g.nombre ? `${enc(g.nombre)} <${g.email}>` : g.email;
+  const eml = [
+    `To: ${para}`, `Subject: ${enc(st.asunto)}`, "X-Unsent: 1", "MIME-Version: 1.0",
+    "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: base64", "",
+    b64(st.cuerpo.replace(/\r?\n/g, "\r\n")).replace(/(.{76})/g, "$1\r\n")
+  ].join("\r\n");
+  const nombre = (g.nombre || g.email).normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/[^a-z0-9]+/gi, "_");
+  bajar(new Blob([eml], { type: "message/rfc822" }), `mail_${nombre}.eml`);
+}
+
+function bajar(blob, nombre) {
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob); a.download = nombre; a.click();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+}
+
 /* ---------------- Carga del archivo ---------------- */
 function mostrarError(msg) { $("error").innerHTML = "<b>No se pudo procesar el archivo.</b><br>" + msg; $("error").classList.remove("hidden"); }
 
@@ -390,19 +619,19 @@ function valorCelda(v) {
   return v;
 }
 
-/* Lee la primera hoja de un .xlsx y devuelve una matriz de filas */
-async function matrizDesdeXlsx(buffer) {
+/* Lee un .xlsx: devuelve la primera hoja (vulnerabilidades) y, si existe, la hoja de responsables */
+async function hojasDesdeXlsx(buffer) {
   if (typeof ExcelJS === "undefined") throw new Error("No se pudo cargar la librería para leer Excel (falta lib/exceljs.min.js).");
   const libro = new ExcelJS.Workbook();
   await libro.xlsx.load(buffer);
-  const hoja = libro.worksheets[0];
-  if (!hoja) throw new Error("El archivo no tiene hojas.");
-  const matriz = [];
-  hoja.eachRow({ includeEmpty: true }, (fila) => {
-    const valores = fila.values.slice(1).map(valorCelda);   // ExcelJS empieza en índice 1
-    matriz.push(valores);
-  });
-  return matriz;
+  if (!libro.worksheets.length) throw new Error("El archivo no tiene hojas.");
+  const aMatriz = (hoja) => {
+    const matriz = [];
+    hoja.eachRow({ includeEmpty: true }, (fila) => matriz.push(fila.values.slice(1).map(valorCelda)));  // ExcelJS empieza en 1
+    return matriz;
+  };
+  const hojaResp = libro.worksheets.slice(1).find(h => HOJA_RESPONSABLES.some(p => normalizar(h.name).includes(p)));
+  return { principal: aMatriz(libro.worksheets[0]), responsables: hojaResp ? aMatriz(hojaResp) : null };
 }
 
 /* Lee un .csv (separador ; o , detectado automáticamente, respeta comillas) */
@@ -432,9 +661,9 @@ async function leerArchivo(file) {
   $("error").classList.add("hidden");
   const ext = file.name.split(".").pop().toLowerCase();
   try {
-    let matriz;
+    let matriz, matrizResp = null;
     if (ext === "csv") matriz = matrizDesdeCsv(await file.text());
-    else if (ext === "xlsx") matriz = await matrizDesdeXlsx(await file.arrayBuffer());
+    else if (ext === "xlsx") ({ principal: matriz, responsables: matrizResp } = await hojasDesdeXlsx(await file.arrayBuffer()));
     else if (ext === "xls") throw new Error("El formato .xls (Excel 97-2003) no está soportado. Abrilo en Excel y guardalo como <b>.xlsx</b>.");
     else throw new Error("Formato no soportado. Usá un archivo <b>.xlsx</b> o <b>.csv</b>.");
 
@@ -443,7 +672,9 @@ async function leerArchivo(file) {
     if (filaEnc < 0) throw new Error("La primera hoja está vacía.");
     const encabezados = matriz[filaEnc].map(h => String(h ?? "").trim());
     const registros = matriz.slice(filaEnc + 1).map(r => Object.fromEntries(encabezados.map((h, i) => [h, r[i]])));
-    const datos = procesar(registros, encabezados);
+    const avisosResp = [];
+    const mapaResp = leerResponsables(matrizResp, avisosResp);
+    const datos = procesar(registros, encabezados, mapaResp, avisosResp);
     if (!datos.resultado.length) throw new Error("No encontré filas con datos debajo de los encabezados.");
     render(file.name, datos);
   } catch (err) {
@@ -460,6 +691,11 @@ input.onchange = () => { if (input.files[0]) leerArchivo(input.files[0]); input.
 drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) leerArchivo(f); });
 $("btnReset").onclick = () => { $("results").classList.add("hidden"); $("upload").classList.remove("hidden"); };
 $("btnCsv").onclick = descargarCsv;
+$("sevMin").onchange = () => {
+  // Cambió qué vulnerabilidades se incluyen: se regeneran todos los mails para que no queden textos desactualizados
+  renderNotificaciones(true);
+  $("notifProgreso").textContent += " · Mails regenerados por el cambio de filtro";
+};
 </script>
 </body>
 </html>
