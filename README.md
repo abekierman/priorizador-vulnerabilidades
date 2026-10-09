@@ -95,7 +95,16 @@ lib/exceljs.min.js          Librería para leer Excel (ExcelJS 4.4.0, licencia M
 lib/EXCELJS-LICENSE         Licencia de ExcelJS
 ejemplos/                   Excel de ejemplo (datos ficticios, mails @example.com) y plantilla vacía
 docs/                       Capturas para este README
+skill/SKILL.md              Copia de la skill de Claude que aplica la misma regla
 ```
+
+## Skill de Claude
+
+En `skill/SKILL.md` hay una copia de la skill **priorizar-vulnerabilidades**. Con ella, Claude aplica la misma regla de priorización cuando se le comparte un Excel en una conversación: entrega un resumen, un Excel priorizado y los borradores de mail para cada responsable.
+
+- La skill **vive en la cuenta de Claude** de cada persona, no en este repo. Este archivo es solo una copia de referencia.
+- **Editar este archivo no cambia la skill.** Para modificarla, hay que pedírselo a Claude y guardar la versión nueva desde la tarjeta que propone.
+- Para usarla, cada persona tiene que guardarla en su cuenta de Claude, o el administrador de Claude en Flock puede compartirla con la organización, si está habilitado.
 
 ## Decisiones técnicas
 
