@@ -1,0 +1,465 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Priorizador de Vulnerabilidades</title>
+<!-- ExcelJS (incluida en /lib): lee archivos Excel directamente en el navegador.
+     Está dentro del repo para no depender de internet. Los datos nunca se envían a un servidor. -->
+<script src="lib/exceljs.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f7f9; --card: #ffffff; --text: #1c2430; --muted: #5d6878; --border: #dde2e9;
+    --accent: #2457c5;
+    --critica: #b42318; --alta: #d9580d; --media: #b58a00; --baja: #2f6fb3; --info: #6b7480;
+    --critica-bg: #fdecea; --alta-bg: #fff1e6; --media-bg: #fff8db; --baja-bg: #e9f1fb; --info-bg: #eef0f3;
+    --warn-bg: #fff8db; --warn-border: #e8cf6a;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12161c; --card: #1b2028; --text: #e6e9ee; --muted: #9aa4b2; --border: #2c3340;
+      --accent: #6d9cff;
+      --critica: #ff7b70; --alta: #ffa05c; --media: #f2cc4d; --baja: #78adf0; --info: #a3abb7;
+      --critica-bg: #3a1d1b; --alta-bg: #3a2616; --media-bg: #362f12; --baja-bg: #172a40; --info-bg: #252b34;
+      --warn-bg: #362f12; --warn-border: #6b5a1c;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; padding: 24px 16px 48px; }
+  header h1 { font-size: 24px; margin: 0 0 4px; }
+  header p { margin: 0 0 20px; color: var(--muted); }
+  .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; margin-bottom: 16px; }
+  h2 { font-size: 17px; margin: 0 0 12px; }
+  h2 small { font-weight: normal; color: var(--muted); font-size: 13px; }
+
+  #drop { border: 2px dashed var(--border); border-radius: 10px; padding: 36px 16px; text-align: center; cursor: pointer; transition: .15s; }
+  #drop:hover, #drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--accent) 6%, transparent); }
+  #drop strong { display: block; font-size: 17px; margin-bottom: 4px; }
+  #drop span { color: var(--muted); font-size: 14px; }
+  .privacy { font-size: 13px; color: var(--muted); margin-top: 10px; text-align: center; }
+
+  .bar-top { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; justify-content: space-between; margin-bottom: 16px; }
+  .file-name { color: var(--muted); font-size: 14px; }
+  button { font: inherit; border: 1px solid var(--border); background: var(--card); color: var(--text);
+    padding: 7px 14px; border-radius: 8px; cursor: pointer; }
+  button:hover { border-color: var(--accent); }
+  button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+
+  .warn { background: var(--warn-bg); border: 1px solid var(--warn-border); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 14px; }
+  .warn ul { margin: 4px 0 0; padding-left: 20px; }
+  .error { background: var(--critica-bg); border: 1px solid var(--critica); border-radius: 8px; padding: 12px 14px; margin-top: 16px; }
+
+  .kpis { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 10px; margin-bottom: 14px; }
+  .kpi { border-radius: 8px; padding: 12px; border: 1px solid var(--border); }
+  .kpi .n { font-size: 28px; font-weight: 700; line-height: 1.1; }
+  .kpi .l { font-size: 13px; color: var(--muted); }
+  .stack { display: flex; height: 14px; border-radius: 7px; overflow: hidden; background: var(--info-bg); }
+  .stack div { height: 100%; }
+
+  .sev { display: inline-block; padding: 1px 9px; border-radius: 999px; font-size: 12.5px; font-weight: 600; white-space: nowrap; }
+  .s-Crítica { color: var(--critica); background: var(--critica-bg); }
+  .s-Alta { color: var(--alta); background: var(--alta-bg); }
+  .s-Media { color: var(--media); background: var(--media-bg); }
+  .s-Baja { color: var(--baja); background: var(--baja-bg); }
+  .s-Informativa, .s-Sin { color: var(--info); background: var(--info-bg); }
+
+  .grid2 { display: grid; grid-template-columns: 2fr 1fr; gap: 16px; }
+  @media (max-width: 820px) { .grid2 { grid-template-columns: 1fr; } }
+  .grid2 > .card { margin-bottom: 0; min-width: 0; }
+  .card { min-width: 0; }
+  .section-gap { margin-top: 16px; }
+
+  .table-wrap { overflow-x: auto; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--border); vertical-align: top; }
+  th { color: var(--muted); font-weight: 600; font-size: 12.5px; text-transform: uppercase; letter-spacing: .03em; white-space: nowrap; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  td.rank { color: var(--muted); width: 1%; }
+
+  .filters { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin-bottom: 12px; }
+  .chip { padding: 4px 12px; border-radius: 999px; font-size: 13px; }
+  .chip.on { background: var(--accent); border-color: var(--accent); color: #fff; }
+  input[type=search] { font: inherit; padding: 6px 10px; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--card); color: var(--text); min-width: 0; flex: 1 1 200px; max-width: 320px; }
+  .muted { color: var(--muted); font-size: 14px; }
+  .hidden { display: none !important; }
+  footer { color: var(--muted); font-size: 13px; text-align: center; margin-top: 24px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>Priorizador de Vulnerabilidades</h1>
+    <p>Subí el Excel de vulnerabilidades y obtené el resumen priorizado por severidad y puntaje CVSS.</p>
+  </header>
+
+  <!-- PANTALLA 1: carga del archivo -->
+  <section id="upload" class="card">
+    <div id="drop" tabindex="0" role="button" aria-label="Seleccionar archivo Excel">
+      <strong>Arrastrá tu Excel acá o hacé clic para elegirlo</strong>
+      <span>Formatos: .xlsx o .csv · Se lee la primera hoja</span>
+    </div>
+    <input id="file" type="file" accept=".xlsx,.csv" class="hidden">
+    <p class="privacy">🔒 El archivo se procesa en tu navegador. No se envía a ningún servidor.</p>
+    <div id="error" class="error hidden"></div>
+  </section>
+
+  <!-- PANTALLA 2: resultados -->
+  <section id="results" class="hidden">
+    <div class="bar-top">
+      <div class="file-name" id="fileName"></div>
+      <div style="display:flex; gap:8px; flex-wrap:wrap">
+        <button id="btnCsv">Descargar priorizado (CSV)</button>
+        <button id="btnReset" class="primary">Cargar otro archivo</button>
+      </div>
+    </div>
+
+    <div id="warnings" class="warn hidden"></div>
+
+    <div class="card">
+      <h2>Resumen por severidad</h2>
+      <div class="kpis" id="kpis"></div>
+      <div class="stack" id="stack" aria-hidden="true"></div>
+    </div>
+
+    <div class="grid2">
+      <div class="card">
+        <h2>Atacar primero <small>· top 10 según la regla de priorización</small></h2>
+        <div class="table-wrap"><table id="topTable"></table></div>
+      </div>
+      <div class="card">
+        <h2>Activos más expuestos <small>· por cantidad de críticas y altas</small></h2>
+        <div id="assets"></div>
+      </div>
+    </div>
+
+    <div class="card section-gap">
+      <h2>Listado completo priorizado</h2>
+      <div class="filters" id="filters"></div>
+      <div class="table-wrap"><table id="fullTable"></table></div>
+      <p class="muted" id="countInfo"></p>
+    </div>
+  </section>
+
+  <footer>Regla: severidad (Crítica &gt; Alta &gt; Media &gt; Baja &gt; Informativa) y, a igual severidad, mayor CVSS primero.
+    Sin severidad, se deriva del CVSS v3 (9.0–10 Crítica · 7.0–8.9 Alta · 4.0–6.9 Media · 0.1–3.9 Baja).</footer>
+</div>
+
+<script>
+/* =========================================================================
+   CONFIGURACIÓN
+   Nombres de columna que la app reconoce (se comparan sin mayúsculas ni tildes).
+   Para agregar un nombre nuevo, sumalo a la lista correspondiente.
+   ========================================================================= */
+const COLUMNAS = {
+  id:        ["id", "codigo", "plugin id", "qid", "vuln id"],
+  titulo:    ["vulnerabilidad", "titulo", "nombre", "descripcion corta", "title", "name", "vulnerability", "plugin name"],
+  severidad: ["severidad", "riesgo", "nivel", "severity", "risk", "risk level"],
+  cvss:      ["cvss", "cvss score", "cvss base score", "cvss v3", "cvss v3 base score", "cvss3", "puntaje", "puntaje cvss", "score"],
+  activo:    ["activo", "host", "servidor", "equipo", "asset", "ip", "hostname", "dns name"],
+  cve:       ["cve", "cves", "cve id"],
+  estado:    ["estado", "status", "state"]
+};
+
+/* Orden de severidades (menor número = más prioritaria) */
+const SEVERIDADES = ["Crítica", "Alta", "Media", "Baja", "Informativa", "Sin clasificar"];
+const SEV_VAR = { "Crítica": "critica", "Alta": "alta", "Media": "media", "Baja": "baja", "Informativa": "info", "Sin clasificar": "info" };
+
+/* Textos de severidad reconocidos (español e inglés) */
+const SEV_TEXTO = {
+  "critica": "Crítica", "critico": "Crítica", "critical": "Crítica", "urgente": "Crítica", "urgent": "Crítica",
+  "alta": "Alta", "alto": "Alta", "high": "Alta",
+  "media": "Media", "medio": "Media", "moderada": "Media", "medium": "Media", "moderate": "Media",
+  "baja": "Baja", "bajo": "Baja", "low": "Baja",
+  "informativa": "Informativa", "informativo": "Informativa", "info": "Informativa", "informational": "Informativa",
+  "none": "Informativa", "ninguna": "Informativa"
+};
+
+/* ========================================================================= */
+
+const $ = (id) => document.getElementById(id);
+let filas = [];          // vulnerabilidades ya priorizadas
+let tieneActivo = false;
+let filtroSev = "Todas";
+let busqueda = "";
+
+function normalizar(t) {
+  return String(t ?? "").normalize("NFD").replace(/[̀-ͯ]/g, "")
+    .toLowerCase().replace(/[_\-.:]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function escapar(t) {   // evita que contenido del Excel se interprete como HTML
+  return String(t ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+}
+
+/* Detecta qué columna del Excel corresponde a cada campo */
+function mapearColumnas(encabezados) {
+  const mapa = {};
+  const norm = encabezados.map(normalizar);
+  for (const [campo, alias] of Object.entries(COLUMNAS)) {
+    const idx = norm.findIndex(h => alias.includes(h));
+    if (idx >= 0) mapa[campo] = encabezados[idx];
+  }
+  return mapa;
+}
+
+function leerCvss(v) {
+  if (v === null || v === undefined || v === "") return null;
+  const n = parseFloat(String(v).replace(",", "."));
+  return (isNaN(n) || n < 0 || n > 10) ? null : n;
+}
+function sevDesdeCvss(c) {        // rangos oficiales CVSS v3
+  if (c === null) return null;
+  if (c >= 9) return "Crítica";
+  if (c >= 7) return "Alta";
+  if (c >= 4) return "Media";
+  if (c > 0) return "Baja";
+  return "Informativa";
+}
+
+function procesar(registros, encabezados) {
+  const mapa = mapearColumnas(encabezados);
+  const avisos = [];
+
+  if (!mapa.titulo) throw new Error("No encontré la columna con el nombre de la vulnerabilidad. Se espera una columna llamada, por ejemplo, <b>Vulnerabilidad</b> o <b>Título</b>.<br>Columnas encontradas: " + encabezados.map(escapar).join(", "));
+  if (!mapa.severidad && !mapa.cvss) throw new Error("No encontré columnas de <b>Severidad</b> ni de <b>CVSS</b>. Se necesita al menos una para poder priorizar.<br>Columnas encontradas: " + encabezados.map(escapar).join(", "));
+  if (!mapa.severidad) avisos.push("No hay columna de Severidad: se calculó a partir del CVSS.");
+  if (!mapa.cvss) avisos.push("No hay columna de CVSS: dentro de cada severidad el orden es el del archivo.");
+  if (!mapa.activo) avisos.push("No hay columna de Activo/Host: no se puede mostrar qué activos están más expuestos.");
+
+  let derivadas = 0, sinClasificar = 0, textosDesconocidos = new Set();
+
+  const resultado = registros
+    .filter(r => String(r[mapa.titulo] ?? "").trim() !== "")
+    .map((r, i) => {
+      const cvss = mapa.cvss ? leerCvss(r[mapa.cvss]) : null;
+      let sev = null;
+      if (mapa.severidad) {
+        const crudo = r[mapa.severidad];
+        sev = SEV_TEXTO[normalizar(crudo)] || null;
+        if (!sev && String(crudo ?? "").trim() !== "") textosDesconocidos.add(String(crudo).trim());
+      }
+      if (!sev && cvss !== null) { sev = sevDesdeCvss(cvss); if (mapa.severidad) derivadas++; }
+      if (!sev) { sev = "Sin clasificar"; sinClasificar++; }
+      return {
+        orden: i,
+        id: mapa.id ? r[mapa.id] : "",
+        titulo: r[mapa.titulo],
+        severidad: sev,
+        cvss,
+        activo: mapa.activo ? String(r[mapa.activo] ?? "").trim() : "",
+        cve: mapa.cve ? r[mapa.cve] : "",
+        estado: mapa.estado ? r[mapa.estado] : ""
+      };
+    });
+
+  /* REGLA DE PRIORIZACIÓN: severidad, luego CVSS descendente, luego orden original */
+  resultado.sort((a, b) =>
+    SEVERIDADES.indexOf(a.severidad) - SEVERIDADES.indexOf(b.severidad) ||
+    (b.cvss ?? -1) - (a.cvss ?? -1) ||
+    a.orden - b.orden);
+  resultado.forEach((f, i) => f.prioridad = i + 1);
+
+  if (textosDesconocidos.size) avisos.push("Valores de severidad no reconocidos: <b>" + [...textosDesconocidos].slice(0, 8).map(escapar).join(", ") + "</b>.");
+  if (derivadas) avisos.push(`${derivadas} fila(s) sin severidad válida: se clasificaron según su CVSS.`);
+  if (sinClasificar) avisos.push(`${sinClasificar} fila(s) quedaron "Sin clasificar" (sin severidad ni CVSS válidos). Revisalas en el listado.`);
+  if (mapa.estado) avisos.push("El archivo tiene columna de Estado: se muestra, pero no se usa para filtrar (por ejemplo, no se excluyen las cerradas).");
+
+  return { resultado, avisos, tieneActivo: !!mapa.activo, tieneCve: !!mapa.cve, tieneEstado: !!mapa.estado, tieneId: !!mapa.id };
+}
+
+/* ---------------- Renderizado ---------------- */
+let cols = {};
+function chipSev(s) { return `<span class="sev s-${s.split(" ")[0]}">${s}</span>`; }
+
+function render(nombreArchivo, datos) {
+  filas = datos.resultado; tieneActivo = datos.tieneActivo;
+  cols = { id: datos.tieneId, cve: datos.tieneCve, estado: datos.tieneEstado, activo: datos.tieneActivo };
+  filtroSev = "Todas"; busqueda = "";
+
+  $("fileName").textContent = `${nombreArchivo} · ${filas.length} vulnerabilidades`;
+  const w = $("warnings");
+  if (datos.avisos.length) { w.innerHTML = "<b>Para tener en cuenta:</b><ul>" + datos.avisos.map(a => `<li>${a}</li>`).join("") + "</ul>"; w.classList.remove("hidden"); }
+  else w.classList.add("hidden");
+
+  // KPIs
+  const cuenta = Object.fromEntries(SEVERIDADES.map(s => [s, filas.filter(f => f.severidad === s).length]));
+  const visibles = SEVERIDADES.filter(s => s !== "Sin clasificar" || cuenta[s] > 0);
+  $("kpis").innerHTML = `<div class="kpi"><div class="n">${filas.length}</div><div class="l">Total</div></div>` +
+    visibles.map(s => `<div class="kpi" style="background:var(--${SEV_VAR[s]}-bg)"><div class="n" style="color:var(--${SEV_VAR[s]})">${cuenta[s]}</div><div class="l">${s}</div></div>`).join("");
+  $("stack").innerHTML = visibles.filter(s => cuenta[s]).map(s =>
+    `<div title="${s}: ${cuenta[s]}" style="width:${cuenta[s] / filas.length * 100}%;background:var(--${SEV_VAR[s]})"></div>`).join("");
+
+  // Top 10
+  $("topTable").innerHTML = tabla(filas.slice(0, 10), false);
+
+  // Activos
+  if (!tieneActivo) {
+    $("assets").innerHTML = `<p class="muted">El archivo no tiene columna de Activo/Host.</p>`;
+  } else {
+    const porActivo = {};
+    for (const f of filas) {
+      if (!f.activo || (f.severidad !== "Crítica" && f.severidad !== "Alta")) continue;
+      porActivo[f.activo] ??= { c: 0, a: 0 };
+      f.severidad === "Crítica" ? porActivo[f.activo].c++ : porActivo[f.activo].a++;
+    }
+    const top = Object.entries(porActivo).sort((x, y) => y[1].c - x[1].c || y[1].a - x[1].a).slice(0, 8);
+    $("assets").innerHTML = top.length
+      ? `<table><tr><th>Activo</th><th class="num">Crít.</th><th class="num">Altas</th></tr>` +
+        top.map(([n, v]) => `<tr><td>${escapar(n)}</td><td class="num">${v.c}</td><td class="num">${v.a}</td></tr>`).join("") + `</table>`
+      : `<p class="muted">No hay vulnerabilidades críticas ni altas asociadas a activos.</p>`;
+  }
+
+  renderFiltros(cuenta);
+  renderListado();
+  $("upload").classList.add("hidden");
+  $("results").classList.remove("hidden");
+  window.scrollTo(0, 0);
+}
+
+function tabla(lista, completa) {
+  const enc = `<tr><th>#</th>${cols.id && completa ? "<th>ID</th>" : ""}<th>Vulnerabilidad</th><th>Severidad</th><th class="num">CVSS</th>${cols.activo ? "<th>Activo</th>" : ""}${cols.cve && completa ? "<th>CVE</th>" : ""}${cols.estado && completa ? "<th>Estado</th>" : ""}</tr>`;
+  if (!lista.length) return enc + `<tr><td colspan="8" class="muted">No hay resultados para este filtro.</td></tr>`;
+  return enc + lista.map(f => `<tr>
+      <td class="rank">${f.prioridad}</td>
+      ${cols.id && completa ? `<td>${escapar(f.id)}</td>` : ""}
+      <td>${escapar(f.titulo)}</td>
+      <td>${chipSev(f.severidad)}</td>
+      <td class="num">${f.cvss === null ? "—" : f.cvss.toFixed(1)}</td>
+      ${cols.activo ? `<td>${escapar(f.activo)}</td>` : ""}
+      ${cols.cve && completa ? `<td>${escapar(f.cve)}</td>` : ""}
+      ${cols.estado && completa ? `<td>${escapar(f.estado)}</td>` : ""}
+    </tr>`).join("");
+}
+
+function renderFiltros(cuenta) {
+  const opciones = ["Todas", ...SEVERIDADES.filter(s => cuenta[s] > 0)];
+  $("filters").innerHTML = opciones.map(s =>
+    `<button class="chip ${s === filtroSev ? "on" : ""}" data-sev="${s}">${s}${s === "Todas" ? "" : ` (${cuenta[s]})`}</button>`).join("") +
+    `<input type="search" id="buscar" placeholder="Buscar por nombre, activo, CVE…">`;
+  $("filters").querySelectorAll(".chip").forEach(b => b.onclick = () => {
+    filtroSev = b.dataset.sev;
+    $("filters").querySelectorAll(".chip").forEach(x => x.classList.toggle("on", x === b));
+    renderListado();
+  });
+  $("buscar").oninput = (e) => { busqueda = normalizar(e.target.value); renderListado(); };
+}
+
+function filtradas() {
+  return filas.filter(f =>
+    (filtroSev === "Todas" || f.severidad === filtroSev) &&
+    (!busqueda || normalizar([f.titulo, f.activo, f.cve, f.id].join(" ")).includes(busqueda)));
+}
+function renderListado() {
+  const lista = filtradas();
+  const MAX = 500;
+  $("fullTable").innerHTML = tabla(lista.slice(0, MAX), true);
+  $("countInfo").textContent = lista.length > MAX
+    ? `Mostrando las primeras ${MAX} de ${lista.length}. Descargá el CSV para ver todas.`
+    : `${lista.length} resultado(s).`;
+}
+
+/* ---------------- Exportar CSV ---------------- */
+function descargarCsv() {
+  const enc = ["Prioridad", "ID", "Vulnerabilidad", "Severidad", "CVSS", "Activo", "CVE", "Estado"];
+  const q = v => `"${String(v ?? "").replace(/"/g, '""')}"`;
+  const lineas = [enc.join(";"), ...filas.map(f =>
+    [f.prioridad, f.id, f.titulo, f.severidad, f.cvss === null ? "" : String(f.cvss).replace(".", ","), f.activo, f.cve, f.estado].map(q).join(";"))];
+  const blob = new Blob(["﻿" + lineas.join("\r\n")], { type: "text/csv;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "vulnerabilidades_priorizadas.csv";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ---------------- Carga del archivo ---------------- */
+function mostrarError(msg) { $("error").innerHTML = "<b>No se pudo procesar el archivo.</b><br>" + msg; $("error").classList.remove("hidden"); }
+
+/* Convierte el valor de una celda de ExcelJS a texto/número simple */
+function valorCelda(v) {
+  if (v === null || v === undefined) return "";
+  if (v instanceof Date) return v.toISOString().slice(0, 10);
+  if (typeof v === "object") {
+    if (v.richText) return v.richText.map(t => t.text).join("");
+    if ("result" in v) return valorCelda(v.result);   // fórmulas: usa el resultado
+    if ("text" in v) return v.text;                   // hipervínculos
+    if (v.error) return "";
+  }
+  return v;
+}
+
+/* Lee la primera hoja de un .xlsx y devuelve una matriz de filas */
+async function matrizDesdeXlsx(buffer) {
+  if (typeof ExcelJS === "undefined") throw new Error("No se pudo cargar la librería para leer Excel (falta lib/exceljs.min.js).");
+  const libro = new ExcelJS.Workbook();
+  await libro.xlsx.load(buffer);
+  const hoja = libro.worksheets[0];
+  if (!hoja) throw new Error("El archivo no tiene hojas.");
+  const matriz = [];
+  hoja.eachRow({ includeEmpty: true }, (fila) => {
+    const valores = fila.values.slice(1).map(valorCelda);   // ExcelJS empieza en índice 1
+    matriz.push(valores);
+  });
+  return matriz;
+}
+
+/* Lee un .csv (separador ; o , detectado automáticamente, respeta comillas) */
+function matrizDesdeCsv(texto) {
+  texto = texto.replace(/^﻿/, "");
+  const primera = texto.split(/\r?\n/)[0] || "";
+  const sep = (primera.split(";").length > primera.split(",").length) ? ";" : ",";
+  const filas = []; let fila = [], campo = "", comillas = false;
+  for (let i = 0; i < texto.length; i++) {
+    const c = texto[i];
+    if (comillas) {
+      if (c === '"' && texto[i + 1] === '"') { campo += '"'; i++; }
+      else if (c === '"') comillas = false;
+      else campo += c;
+    } else if (c === '"') comillas = true;
+    else if (c === sep) { fila.push(campo); campo = ""; }
+    else if (c === "\n" || c === "\r") {
+      if (c === "\r" && texto[i + 1] === "\n") i++;
+      fila.push(campo); filas.push(fila); fila = []; campo = "";
+    } else campo += c;
+  }
+  if (campo !== "" || fila.length) { fila.push(campo); filas.push(fila); }
+  return filas;
+}
+
+async function leerArchivo(file) {
+  $("error").classList.add("hidden");
+  const ext = file.name.split(".").pop().toLowerCase();
+  try {
+    let matriz;
+    if (ext === "csv") matriz = matrizDesdeCsv(await file.text());
+    else if (ext === "xlsx") matriz = await matrizDesdeXlsx(await file.arrayBuffer());
+    else if (ext === "xls") throw new Error("El formato .xls (Excel 97-2003) no está soportado. Abrilo en Excel y guardalo como <b>.xlsx</b>.");
+    else throw new Error("Formato no soportado. Usá un archivo <b>.xlsx</b> o <b>.csv</b>.");
+
+    // Busca la fila de encabezados: la primera con al menos 2 celdas con texto
+    const filaEnc = matriz.findIndex(r => r.filter(c => String(c ?? "").trim() !== "").length >= 2);
+    if (filaEnc < 0) throw new Error("La primera hoja está vacía.");
+    const encabezados = matriz[filaEnc].map(h => String(h ?? "").trim());
+    const registros = matriz.slice(filaEnc + 1).map(r => Object.fromEntries(encabezados.map((h, i) => [h, r[i]])));
+    const datos = procesar(registros, encabezados);
+    if (!datos.resultado.length) throw new Error("No encontré filas con datos debajo de los encabezados.");
+    render(file.name, datos);
+  } catch (err) {
+    mostrarError(err && err.message ? err.message : "El archivo no parece ser un Excel válido.");
+  }
+}
+
+const drop = $("drop"), input = $("file");
+drop.onclick = () => input.click();
+drop.onkeydown = (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); input.click(); } };
+input.onchange = () => { if (input.files[0]) leerArchivo(input.files[0]); input.value = ""; };
+["dragenter", "dragover"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.add("over"); }));
+["dragleave", "drop"].forEach(ev => drop.addEventListener(ev, e => { e.preventDefault(); drop.classList.remove("over"); }));
+drop.addEventListener("drop", e => { const f = e.dataTransfer.files[0]; if (f) leerArchivo(f); });
+$("btnReset").onclick = () => { $("results").classList.add("hidden"); $("upload").classList.remove("hidden"); };
+$("btnCsv").onclick = descargarCsv;
+</script>
+</body>
+</html>
